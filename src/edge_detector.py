@@ -7,7 +7,7 @@ class EdgeDetector(object):
 
     def __init__(self, img):
         """Construct an edge detector for an image."""
-        self.suppressed = self.non_maximal_suppresion(*self.get_gradients(img))
+        self.suppressed = self.non_maximal_suppression(*self.get_gradients(img))
 
     def get_gradients(self, img):
         """Computes gradients of a grayscale image.
@@ -20,15 +20,15 @@ class EdgeDetector(object):
             theta: A (height, width) float numpy array of gradient directions.
         """
 
-        blurred = scipy.ndimage.filters.gaussian_filter(img, 2)
-        Gx = scipy.ndimage.filters.sobel(blurred, axis=1)
-        Gy = scipy.ndimage.filters.sobel(blurred, axis=0)
+        blurred = scipy.ndimage.gaussian_filter(img, 2)
+        Gx = scipy.ndimage.sobel(blurred, axis=1)
+        Gy = scipy.ndimage.sobel(blurred, axis=0)
         G = np.sqrt(Gx**2 + Gy**2)
         theta = np.arctan2(Gy, Gx)
 
         return G, theta
 
-    def non_maximal_suppresion(self, G, theta):
+    def non_maximal_suppression(self, G, theta):
         """Performs non-maximal-suppression of gradients.
 
         Bins into 4 directions (up/down, left/right, both diagonals),
@@ -44,54 +44,39 @@ class EdgeDetector(object):
                 gradient magnitudes.
         """
 
-        right = 0
-        down_right = 1
-        down = 2
-        down_left = 3
+        theta *= 180.0 / np.pi
+        theta[theta > 180.0] -= 180.0
+        hits = np.zeros_like(G, dtype=bool)
+        correlate = scipy.ndimage.correlate
+        correlate1d = scipy.ndimage.correlate1d
+        convolve = scipy.ndimage.convolve
+        convolve1d = scipy.ndimage.convolve1d
 
-        def bin_direction(direction):
-            direction = direction * 180 / np.pi
-            if direction > 180.0:
-                direction -= 180.0
+        kernel = np.array([0.0, 1.0, -1.0])
+        mask = np.logical_or(theta < 22.5, theta > 157.5)
+        hits[mask] = np.logical_and(correlate1d(G, kernel, axis=-1)[mask] >= 0.0,
+                                    convolve1d(G, kernel, axis=-1)[mask] >= 0.0)
 
-            if direction < 22.5:
-                return right
-            elif direction < 67.5:
-                return down_right
-            elif direction < 112.5:
-                return down
-            elif direction < 157.5:
-                return down_left
-            else:
-                return right
+        mask = np.logical_and(theta >= 67.5, theta < 112.5)
+        hits[mask] = np.logical_and(correlate1d(G, kernel, axis=0)[mask] >= 0.0,
+                                    convolve1d(G, kernel, axis=0)[mask] >= 0.0)
 
-        height, width = G.shape
-        mirror = np.zeros((height+2, width+2))
-        mirror[1:height+1, 1:width+1] = G
-        suppressed = np.zeros((height, width))
+        kernel = np.array([[0.0, 0.0, 0.0],
+                           [0.0, 1.0, 0.0],
+                           [0.0, 0.0, -1.0]])
+        mask = np.logical_and(theta >= 22.5, theta < 67.5)
+        hits[mask] = np.logical_and(correlate(G, kernel)[mask] >= 0.0,
+                                    convolve(G, kernel)[mask] >= 0.0)
 
-        for y in range(height):
-            for x in range(width):
-                direction = bin_direction(theta[y, x])
-                y_m = y+1
-                x_m = x+1
+        kernel = np.array([[0.0, 0.0, 0.0],
+                           [0.0, 1.0, 0.0],
+                           [-1.0, 0.0, 0.0]])
+        mask = np.logical_and(theta >= 112.5, theta < 157.5)
+        hits[mask] = np.logical_and(correlate(G, kernel)[mask] >= 0.0,
+                                    convolve(G, kernel)[mask] >= 0.0)
 
-                if direction == right:
-                    if (mirror[y_m, x_m] >= mirror[y_m, x_m+1]
-                        and mirror[y_m, x_m] >= mirror[y_m, x_m-1]):
-                        suppressed[y, x] = mirror[y_m, x_m]
-                elif direction == down_right:
-                    if (mirror[y_m, x_m] >= mirror[y_m+1, x_m+1]
-                        and mirror[y_m, x_m] >= mirror[y_m-1, x_m-1]):
-                        suppressed[y, x] = mirror[y_m, x_m]
-                elif direction == down:
-                    if (mirror[y_m, x_m] >= mirror[y_m+1, x_m]
-                        and mirror[y_m, x_m] >= mirror[y_m-1, x_m]):
-                        suppressed[y, x] = mirror[y_m, x_m]
-                elif direction == down_left:
-                    if (mirror[y_m, x_m] >= mirror[y_m+1, x_m-1]
-                        and mirror[y_m, x_m] >= mirror[y_m-1, x_m+1]):
-                        suppressed[y, x] = mirror[y_m, x_m]
+        suppressed = G.copy()
+        suppressed[np.logical_not(hits)] = 0.0
 
         return suppressed
 
